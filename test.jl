@@ -12,12 +12,19 @@ using ResumableFunctions
 
 #### DATA STRUCTURES ####
 
-struct Product 
-    id::Int 
+struct ProductType
+    id::Int
     arrival_rate::Float64
     processing_time::Dict{Int,Tuple{Float64, Float64}}
-    route::Vector{Int} 
-end 
+    route::Vector{Int}
+end
+
+struct Job 
+    id::Int
+    product::ProductType
+    arrival::Float64
+    step::Int # where we are in the route
+end
 
 struct Machine 
     id::Int
@@ -30,9 +37,15 @@ struct Worker
     qualifications::Vector{Int}
 end 
 
+struct System 
+    machine_queues::Dict{int, Vector}
+    available_workers::Vector{Worker}
+    last_job_id::Int
+end 
+
 #### INSTANCES ####
 
-T1 = Product(
+T1 = ProductType(
     1, 
     0.29, 
     Dict(
@@ -44,7 +57,7 @@ T1 = Product(
         ),
     [1, 2, 3, 4, 8]) # order of machines by indices 
 
-T2 = Product(
+T2 = ProductType(
     2, 
     0.32, 
     Dict(
@@ -54,7 +67,7 @@ T2 = Product(
         ),
     [2, 4, 7])
 
-T3 = Product(
+T3 = ProductType(
     3, 
     0.47, 
     Dict(
@@ -64,7 +77,7 @@ T3 = Product(
         ),
     [3, 5, 1])
 
-T4 = Product(
+T4 = ProductType(
     4, 
     0.38, 
     Dict(
@@ -85,12 +98,41 @@ M7 = Machine(7, Resource(env, capacity=1))
 M8 = Machine(8, Resource(env, capacity=1))
 
 # Instance 1 workers 
-E1 = Worker(1, [1,2])
-E2 = Worker(2, [1,2])
-E3 = Worker(3, [1,2])
-E4 = Worker(4, [1,2])
+workers = [
+    Worker(1, [1,2]),
+    Worker(2, [3,4]), 
+    Worker(3, [5,6]),
+    Worker(4, [7,8])
+    ]
 
 ### Poisson Arrivals of Products ###
+
+@resumable function product_arrival(env, product::ProductType, state)
+    while true
+        # Create job with latest id 
+        state.last_job_id += 1 
+        id = state.last_job_id
+        job = Job(id, product, now(env), 1)
+
+        # Identify the first machine and add it to corresponding queue 
+        first_machine = product.route[1]
+        push!(state.machine_queues[first_machine], job)
+
+        println("Job $id arrives at M$first_machine at ", now(env))
+
+        trigger_assignment(env, state) # trigger event 
+
+        # poisson timeout until next generation 
+        wait_time = randexp() / product.arrival_rate
+        @yield timeout(env, wait_time)
+    end 
+end 
+
+
+
+
+### ALGO ###
+
 
 
 
