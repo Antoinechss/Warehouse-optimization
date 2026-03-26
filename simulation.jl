@@ -3,15 +3,15 @@ ATRSC Project - Warehouse optimization
 """
 
 # Builtin simulator import
-import Pkg
-Pkg.add(Pkg.PackageSpec(name="ResumableFunctions", version="0.6"))
-Pkg.add(Pkg.PackageSpec(name="SimJulia", version="0.6"))
 using SimJulia
 using ResumableFunctions
+using Random
 
 env = Simulation()
 
-#### DATA STRUCTURES ####
+# --------------------------------------------
+#           Data structures components 
+# --------------------------------------------
 
 struct ProductType
     id::Int
@@ -20,16 +20,15 @@ struct ProductType
     route::Vector{Int}
 end
 
-struct Job 
+mutable struct Job 
     id::Int
     product::ProductType
     arrival::Float64
     step::Int # where we are in the route
 end
 
-struct Machine 
+mutable struct Machine 
     id::Int
-    resource::Resource
     busy::Bool 
 end 
 
@@ -38,13 +37,154 @@ struct Worker
     qualifications::Vector{Machine}
 end 
 
-struct SystemState
-    machine_queues::Dict{int, Vector{Job}}
+mutable struct SystemState
+    machine_queues::Dict{Int, Vector{Job}}
     last_job_id::Int
     worker_events::Dict{Int, Event}
 end 
 
-#### INSTANCES ####
+
+# --------------------------------------------
+#       Poisson Arrivals of Products 
+# --------------------------------------------
+
+@resumable function product_arrival(env, product::ProductType, state::SystemState, workers::Vector{Worker})
+    """
+    Poisson arrival of products, each arrival creates a new job
+    places it in the queue of first machine in product route 
+    sends trigger to workers for possible action 
+    """
+    while true
+        state.last_job_id += 1
+        id = state.last_job_id
+
+        job = Job(id, product, now(env), 1)
+
+        first_machine = product.route[1]
+        push!(state.machine_queues[first_machine], job)
+
+        println("Job $(job.id) ARRIVES at M$(first_machine) at ", now(env))
+
+        trigger_assignment!(env, state, workers)
+
+        wait_time = randexp() / product.arrival_rate
+        @yield timeout(env, wait_time)
+    end
+end
+
+### Simulation progression functions ###
+
+function progress_job!(env, job::Job, state::SystemState)
+    """
+    Progresses a job from a step to another, updating the machine queues and logging the time spent in the system 
+    """
+    job.step += 1 # progress one step further 
+
+    # finished job case 
+    if job.step > length(job.product.route)
+        time_in_system = now(env) - job.arrival
+        println("Job $(job.id) completed at timestamp", now(env), " | Spent", time_in_system, "in system")
+        return 
+    end 
+
+    # moving to next step case 
+    next_step_machine = job.product.route[job.step]
+    push!(state.machine_queues[next_step_machine], job)
+    println("Job $(job.id) pending on machine", next_step_machine, " at timestamp", now(env))
+end 
+
+function trigger_assignment!(env, state::SystemState, workers::Vector{Worker})
+    """Wake up all workers for possible reassignment on tasks everytime an event happens in the System"""
+    for worker in workers
+        ev = state.worker_events[worker.id]
+        succeed(ev) # Wakes the worker if currently waiting on ev 
+        state.worker_events[worker.id] = Event(env)
+    end
+end
+
+@resumable function worker_process(env, worker::Worker, state::SystemState, workers::Vector{Worker})
+    while true 
+        job, machine = select_job_fifo(worker, state)
+
+        if job === nothing 
+            @yield state.worker_events[worker.id]
+            continue 
+        end 
+
+        # START TASK 
+        popfirst!(state.machine_queues[machine.id])
+        machine.busy = true 
+
+        println(
+            " worker n° ", worker.id,
+            " starts job ", job.id, 
+            " at timestamp ", now(env),
+            " on machine ", machine.id
+        ) 
+
+        a, b = job.product.processing_time[machine.id]
+        process_time = rand() * (b - a) + a 
+
+        @yield timeout(env, process_time)
+
+        println(
+            " worker n° ", worker.id,
+            " finished job ", job.id, 
+            " at timestamp ", now(env),
+            " on machine ", machine.id
+        ) 
+
+        machine.busy = false 
+        # END TASK
+
+        progress_job!(env, job, state) # Move on to next task
+        trigger_assignment!(env, state, workers) # Trigger change 
+    end
+end
+
+# -------------------------------------
+#     FIFO ALGO FOR WORKER DECISION
+# -------------------------------------
+
+function select_job_fifo(worker::Worker, state::SystemState)
+    """
+    Worker decision algorithm (FIFO Based): 
+    Once finished a task, he looks for the job that has been waiting for the longest among the machines 
+    that he is able to work on and that are waiting for a worker to resume
+    """
+    selected_job = nothing
+    selected_machine = nothing 
+    earliest_arrival = Inf
+
+    for machine in worker.qualifications 
+        machine_id = machine.id
+
+        if machine.busy 
+            continue 
+        end 
+
+        # Finding longest pending job within the possibles 
+        queue = state.machine_queues[machine_id]
+        if !isempty(queue)
+            job = queue[1]
+            if job.arrival < earliest_arrival
+                earliest_arrival = job.arrival
+                selected_job = job
+                selected_machine = machine
+            end 
+        end 
+    end 
+    return selected_job, selected_machine
+end 
+
+
+#--------------------------------------------------------------------------------------------
+#                                       SIMULATION LAUNCH 
+#--------------------------------------------------------------------------------------------
+
+# ---------------------
+#       Instances 
+# ---------------------
 
 T1 = ProductType(
     1, 
@@ -89,14 +229,14 @@ T4 = ProductType(
         ),
     [5, 6, 7, 8])
 
-M1 = Machine(1, Resource(env, capacity=1), false)
-M2 = Machine(2, Resource(env, capacity=1), false)
-M3 = Machine(3, Resource(env, capacity=1), false)
-M4 = Machine(4, Resource(env, capacity=1), false)
-M5 = Machine(5, Resource(env, capacity=1), false)
-M6 = Machine(6, Resource(env, capacity=1), false)
-M7 = Machine(7, Resource(env, capacity=1), false)
-M8 = Machine(8, Resource(env, capacity=1), false)
+M1 = Machine(1, false)
+M2 = Machine(2, false)
+M3 = Machine(3, false)
+M4 = Machine(4, false)
+M5 = Machine(5, false)
+M6 = Machine(6, false)
+M7 = Machine(7, false)
+M8 = Machine(8, false)
 
 # Workers for Instance I1 
 workers = [
@@ -110,142 +250,18 @@ machine_queues = Dict(i => Job[] for i in 1:8)
 worker_events = Dict(w.id => Event(env) for w in workers)
 state = SystemState(machine_queues, 0, worker_events)
 
+# ----------------------------
+#           Processes 
+# ----------------------------
 
-# --------------------------------------------
-#       Poisson Arrivals of Products 
-# --------------------------------------------
-
-@resumable function product_arrival(env, product::ProductType, state::SystemState, workers::Vector{Worker})
-    """
-    Poisson arrival of products, each arrival creates a new job
-    places it in the queue of first machine in product route 
-    sends trigger to workers for possible action 
-    """
-    while true
-        state.last_job_id += 1
-        id = state.last_job_id
-
-        job = Job(id, product, now(env), 1)
-
-        first_machine = product.route[1]
-        push!(state.machine_queues[first_machine], job)
-
-        println("Job $(job.id) ARRIVES at M$(first_machine) at ", now(env))
-
-        trigger_assignment!(env, state, workers)
-
-        wait_time = randexp() / product.arrival_rate
-        @yield timeout(env, wait_time)
-    end
-end
-
-### Simulation progression functions ###
-
-function progress_job!(env, job::Job, state::SystemState)
-    """
-    Progresses a job from a step to another, updating the machine queues and logging the time spent in the system 
-    """
-    job.step += 1 # progress one step further 
-
-    # finished job case 
-    if job.step > len(job.product.route)
-        time_in_system = now(env) - job.arrival
-        println("Job $(job.id) completed at timestamp", now(env), " | Spent", time_in_system, "in system")
-        return 
-    end 
-
-    # moving to next step case 
-    next_step_machine = job.product.route[job.step]
-    push!(state.machine_queues[next_step_machine], job)
-    println("Job $(job.id) pending on machine", next_step_machine, " at timestamp", now(env))
+# Start product spawns 
+@process product_arrival(env, T1, state, workers)
+@process product_arrival(env, T2, state, workers)
+@process product_arrival(env, T3, state, workers)
+@process product_arrival(env, T4, state, workers)
+# Start workers activity 
+for worker in workers 
+    @process worker_process(env, worker, state, workers)
 end 
 
-function trigger_assignment!(env, state::SystemState, workers::Vector{Worker})
-    """Wake up all workers for possible reassignment on tasks everytime an event happens in the System"""
-    for worker in workers
-        ev = state.worker_events[worker.id]
-        succeed(ev) # Wakes the worker if currently waiting on ev 
-        state.worker_events[worker.id] = Event(env)
-    end
-end
-
-@resumable function worker_process(env, worker::Worker, state::SystemState, workers::Vector{Worker})
-    """Fully event driven process for workers"""
-    while true 
-        job, machine = select_job_fifo(worker, state)
-
-        # case if no jobs available yet, stay in waiting room and wait for new event trigger 
-        if job == nothing 
-            @yield state.worker_events[worker.id]
-            continue 
-        end 
-
-        # START TASK 
-        popfirst!(state.machine_queues[machine.id]) # remove job from waiting line 
-        machine.busy = true 
-        println(
-            " worker n° ", worker.id,
-            " starts job ", job.id, 
-            " at timestamp ", now(env),
-            " on machine ", machine.id
-            ) 
-
-        # Freeze worker for a uniformly distributed processing time 
-        a, b = job.product.processing_time[machine.id]
-        process_time = rand() * (b - a) + a 
-        @yield timeout(env, process_time)
-        println(
-            " worker n° ", worker.id,
-            " finished job ", job.id, 
-            " at timestamp ", now(env),
-            " on machine ", machine.id
-            ) 
-        machine.busy = false 
-        # END TASK
-
-        progress_job!(env, job, state) # move to next machine 
-        trigger_assignment!(env, state, workers) # event trigger 
-
-
-# -------------------------------------
-#     FIFO ALGO FOR WORKER DECISION
-# -------------------------------------
-
-function select_job_fifo(worker::Worker, state::SystemState)
-    """
-    Worker decision algorithm (FIFO Based): 
-    Once finished a task, he looks for the job that has been waiting for the longest among the machines 
-    that he is able to work on and that are waiting for a worker to resume
-    """
-    selected_job = nothing
-    selected_machine = nothing 
-    earliest_arrival = Inf
-
-    for machine in worker.qualifications 
-        machine_id = machine.id
-
-        if machine.busy 
-            continue 
-        end 
-
-        # Finding longest pending job within the possibles 
-        queue = state.machine_queues[machine_id]
-        if !isempty(queue)
-            job = queue[1]
-            if job.arrival < earliest_arrival
-                earliest_arrival = job.arrival
-                selected_job = job
-                selected_machine = machine
-            end 
-        end 
-    end 
-    return selected_job, selected_machine
-end 
-
-#--------------------------------------------------------------------------------------------
-#------------------------------------ SIMULATION LAUNCH -------------------------------------
-#--------------------------------------------------------------------------------------------
-
-
-
-run(env)
+run(env, 100.0) # Running 100 simulation steps 
