@@ -29,15 +29,15 @@ end
 struct Machine 
     id::Int
     resource::Resource
+    busy::Bool 
 end 
 
 struct Worker 
-    instance::Int 
     id::Int 
-    qualifications::Vector{Int}
+    qualifications::Vector{Machine}
 end 
 
-struct System 
+struct SystemState
     machine_queues::Dict{int, Vector}
     available_workers::Vector{Worker}
     last_job_id::Int
@@ -99,15 +99,15 @@ M8 = Machine(8, Resource(env, capacity=1))
 
 # Instance 1 workers 
 workers = [
-    Worker(1, [1,2]),
-    Worker(2, [3,4]), 
-    Worker(3, [5,6]),
-    Worker(4, [7,8])
+    Worker(1, [M1,M2]),
+    Worker(2, [M3,M4]), 
+    Worker(3, [M5,M6]),
+    Worker(4, [M7,M8])
     ]
 
 ### Poisson Arrivals of Products ###
 
-@resumable function product_arrival(env, product::ProductType, state)
+@resumable function product_arrival(env, product::ProductType, state::SystemState)
     while true
         # Create job with latest id 
         state.last_job_id += 1 
@@ -130,10 +130,40 @@ end
 
 
 
+# -------------------------------------
+#     FIFO ALGO FOR WORKER DECISION
+# -------------------------------------
 
-### ALGO ###
+function select_job_fifo(worker::Worker, state::SystemState)
+    """
+    Worker decision algorithm (FIFO Based): 
+    Once finished a task, he looks for the job that has been waiting for the longest among the machines 
+    that he is able to work on and that are waiting for a worker to resume
+    """
+    selected_job = nothing
+    selected_machine = nothing 
+    earliest_arrival = inf
 
+    for machine in worker.qualifications 
+        machine_id = machine.id
 
+        if machine.busy 
+            continue 
+        end 
+
+        # Finding longest pending job within the possibles 
+        queue = state.machine_queues[id]
+        if !isempty(queue)
+            job = queue[1]
+            if job.arrival < earliest_arrival
+                earliest_arrival = job.arrival
+                selected_job = job
+                selected_machine = machine
+            end 
+        end 
+    end 
+    return selected_job, selected_machine
+end 
 
 
 env = simulation()
