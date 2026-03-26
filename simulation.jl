@@ -103,6 +103,7 @@ function trigger_assignment!(env, state::SystemState, workers::Vector{Worker})
 end
 
 @resumable function worker_process(env, worker::Worker, state::SystemState, workers::Vector{Worker})
+    """ Fully event driven process for worker """
     while true 
         job, machine = select_job_fifo(worker, state)
 
@@ -122,10 +123,11 @@ end
             " on machine ", machine.id
         ) 
 
+        # uniformly distributed random processing time 
         a, b = job.product.processing_time[machine.id]
         process_time = rand() * (b - a) + a 
 
-        @yield timeout(env, process_time)
+        @yield timeout(env, process_time) # freeze worker while doing task
 
         println(
             " worker n° ", worker.id,
