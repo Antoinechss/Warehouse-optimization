@@ -1,5 +1,7 @@
 """
 ATRSC Project - Warehouse optimization 
+Simulation Instance 1 
+FIFO Algorithm
 """
 
 # Builtin simulator import
@@ -61,7 +63,7 @@ end
         job = Job(id, product, now(env), 1)
 
         first_machine = product.route[1]
-        push!(state.machine_queues[first_machine], job)
+        enqueue_job!(state.machine_queues[first_machine], job)
 
         println("Job $(job.id) ARRIVES at M$(first_machine) at ", now(env))
 
@@ -74,24 +76,40 @@ end
 
 ### Simulation progression functions ###
 
+function enqueue_job!(queue::Vector{Job}, job::Job)
+    """
+    Insert a job maintaining arrival-time order (oldest first).
+    push! gives insertion-time order, which diverges from arrival-time order
+    once jobs route through multiple machines: a job that arrived early but
+    spent time at prior machines is pushed AFTER newer jobs already queued
+    here, making queue[1].arrival wrong for FIFO selection.
+    """
+    lo, hi = 1, length(queue) + 1
+    while lo < hi
+        mid = (lo + hi) ÷ 2
+        queue[mid].arrival <= job.arrival ? lo = mid + 1 : hi = mid
+    end
+    insert!(queue, lo, job)
+end
+
 function progress_job!(env, job::Job, state::SystemState)
     """
-    Progresses a job from a step to another, updating the machine queues and logging the time spent in the system 
+    Progresses a job from a step to another, updating the machine queues and logging the time spent in the system
     """
-    job.step += 1 # progress one step further 
+    job.step += 1 # progress one step further
 
-    # finished job case 
+    # finished job case
     if job.step > length(job.product.route)
         time_in_system = now(env) - job.arrival
         println("Job $(job.id) completed at timestamp", now(env), " | Spent", time_in_system, "in system")
-        return 
-    end 
+        return
+    end
 
-    # moving to next step case 
+    # moving to next step case
     next_step_machine = job.product.route[job.step]
-    push!(state.machine_queues[next_step_machine], job)
+    enqueue_job!(state.machine_queues[next_step_machine], job)
     println("Job $(job.id) pending on machine", next_step_machine, " at timestamp", now(env))
-end 
+end
 
 function trigger_assignment!(env, state::SystemState, workers::Vector{Worker})
     """Wake up all workers for possible reassignment on tasks everytime an event happens in the System"""
@@ -102,45 +120,59 @@ function trigger_assignment!(env, state::SystemState, workers::Vector{Worker})
     end
 end
 
+@resumable function execute_job(env, job::Job, machine::Machine, state::SystemState, workers::Vector{Worker}, worker_id::Int)
+    """
+    Execute one job on one machine, then advance it.
+    Splitting this out from worker_process is the only reliable fix for this version of
+    ResumableFunctions: the macro's variable-substitution pass treats all code after a
+    generated `return` (i.e. after @yield) as dead, so local variables like job_maybe
+    are never rewritten to struct-field accesses and are undefined on resume.
+    Function PARAMETERS, by contrast, are written into the struct at construction time
+    and are always available across any @yield — no substitution pass needed.
+    """
+    println(
+        " worker n° ", worker_id,
+        " starts job ", job.id,
+        " at timestamp ", now(env),
+        " on machine ", machine.id
+    )
+
+    a, b = job.product.processing_time[machine.id]
+    process_time = rand() * (b - a) + a
+
+    @yield timeout(env, process_time)
+
+    println(
+        " worker n° ", worker_id,
+        " finished job ", job.id,
+        " at timestamp ", now(env),
+        " on machine ", machine.id
+    )
+
+    machine.busy = false
+    progress_job!(env, job, state)
+    trigger_assignment!(env, state, workers)
+end
+
 @resumable function worker_process(env, worker::Worker, state::SystemState, workers::Vector{Worker})
     """ Fully event driven process for worker """
-    while true 
-        job, machine = select_job_fifo(worker, state)
+    while true
+        _sel       = select_job_fifo(worker, state)
+        job_maybe  = _sel[1]
+        mach_maybe = _sel[2]
 
-        if job === nothing 
+        if job_maybe === nothing
             @yield state.worker_events[worker.id]
-            continue 
-        end 
+            continue
+        end
 
-        # START TASK 
-        popfirst!(state.machine_queues[machine.id])
-        machine.busy = true 
+        # Remove from queue and mark busy before spawning subprocess.
+        # job_maybe and mach_maybe are NOT used after the @yield below,
+        # so they are not cross-yield variables — no substitution issue.
+        popfirst!(state.machine_queues[mach_maybe.id])
+        mach_maybe.busy = true
 
-        println(
-            " worker n° ", worker.id,
-            " starts job ", job.id, 
-            " at timestamp ", now(env),
-            " on machine ", machine.id
-        ) 
-
-        # uniformly distributed random processing time 
-        a, b = job.product.processing_time[machine.id]
-        process_time = rand() * (b - a) + a 
-
-        @yield timeout(env, process_time) # freeze worker while doing task
-
-        println(
-            " worker n° ", worker.id,
-            " finished job ", job.id, 
-            " at timestamp ", now(env),
-            " on machine ", machine.id
-        ) 
-
-        machine.busy = false 
-        # END TASK
-
-        progress_job!(env, job, state) # Move on to next task
-        trigger_assignment!(env, state, workers) # Trigger change 
+        @yield @process execute_job(env, job_maybe::Job, mach_maybe::Machine, state, workers, worker.id)
     end
 end
 
