@@ -8,6 +8,8 @@ FIFO Algorithm
 using SimJulia
 using ResumableFunctions
 using Random
+using Statistics
+
 
 env = Simulation()
 
@@ -43,11 +45,13 @@ mutable struct SystemState
     machine_queues::Dict{Int, Vector{Job}}
     last_job_id::Int
     worker_events::Dict{Int, Event}
+    product_time_in_system::Dict{Int, Vector{Float64}}
+    worker_busy_time::Dict{Int, Float64}
 end 
 
 
 # --------------------------------------------
-#       Poisson Arrivals of Products 
+#       Simulation progression functions 
 # --------------------------------------------
 
 @resumable function product_arrival(env, product::ProductType, state::SystemState, workers::Vector{Worker})
@@ -74,7 +78,6 @@ end
     end
 end
 
-### Simulation progression functions ###
 
 function enqueue_job!(queue::Vector{Job}, job::Job)
     """
@@ -101,6 +104,7 @@ function progress_job!(env, job::Job, state::SystemState)
     # finished job case
     if job.step > length(job.product.route)
         time_in_system = now(env) - job.arrival
+        push!(state.product_time_in_system[job.product.id], time_in_system) # Track time spent in system for metrics 
         println("Job $(job.id) completed at timestamp", now(env), " | Spent", time_in_system, "in system")
         return
     end
@@ -121,15 +125,7 @@ function trigger_assignment!(env, state::SystemState, workers::Vector{Worker})
 end
 
 @resumable function execute_job(env, job::Job, machine::Machine, state::SystemState, workers::Vector{Worker}, worker_id::Int)
-    """
-    Execute one job on one machine, then advance it.
-    Splitting this out from worker_process is the only reliable fix for this version of
-    ResumableFunctions: the macro's variable-substitution pass treats all code after a
-    generated `return` (i.e. after @yield) as dead, so local variables like job_maybe
-    are never rewritten to struct-field accesses and are undefined on resume.
-    Function PARAMETERS, by contrast, are written into the struct at construction time
-    and are always available across any @yield — no substitution pass needed.
-    """
+    """ Execute one job on one machine, then advance it."""
     println(
         " worker n° ", worker_id,
         " starts job ", job.id,
@@ -140,6 +136,7 @@ end
     a, b = job.product.processing_time[machine.id]
     process_time = rand() * (b - a) + a
 
+    state.worker_busy_time[worker_id] += process_time
     @yield timeout(env, process_time)
 
     println(
@@ -177,12 +174,12 @@ end
 end
 
 # -------------------------------------
-#     FIFO ALGO FOR WORKER DECISION
+#     ALGOS FOR WORKER DECISION
 # -------------------------------------
 
 function select_job_fifo(worker::Worker, state::SystemState)
     """
-    Worker decision algorithm (FIFO Based): 
+    FIFO decision algorithm: 
     Once finished a task, he looks for the job that has been waiting for the longest among the machines 
     that he is able to work on and that are waiting for a worker to resume
     """
@@ -280,13 +277,22 @@ workers = [
     Worker(4, [M7,M8])
     ]
 
+# ------------------------------------
+#       Metrics Initialization  
+# ------------------------------------
+
+product_time_in_system = Dict(i => Float64[] for i in 1:4)
+worker_busy_time = Dict(w.id => 0.0 for w in workers)
+
+# ------------------------------------
+#       State Initialization  
+# ------------------------------------
+
 machine_queues = Dict(i => Job[] for i in 1:8)
 worker_events = Dict(w.id => Event(env) for w in workers)
-state = SystemState(machine_queues, 0, worker_events)
+state = SystemState(machine_queues, 0, worker_events, product_time_in_system, worker_busy_time)
 
-# ----------------------------
-#           Processes 
-# ----------------------------
+# ---- RUN SIMULATION ---- 
 
 # Start product spawns 
 @process product_arrival(env, T1, state, workers)
@@ -297,5 +303,26 @@ state = SystemState(machine_queues, 0, worker_events)
 for worker in workers 
     @process worker_process(env, worker, state, workers)
 end 
+# Running 100 simulation steps 
+simulation_time = 100.0
+run(env, simulation_time) 
 
-run(env, 100.0) # Running 100 simulation steps 
+# ---- METRICS ---- 
+
+# Per product avg time spent in system 
+for (product_id, times) in state.product_time_in_system
+    if !isempty(times)
+        println("Product $product_id average time = ", mean(times))
+    end
+end
+# Global avg time spent in system 
+all_times = vcat(values(state.product_time_in_system)...)
+if !isempty(all_times)
+    println("Global average time = ", mean(all_times))
+end
+# Worker load repartition 
+for (worker_id, busy_time) in state.worker_busy_time
+    utilization = busy_time / simulation_time
+    println("Worker $worker_id utilization = ", utilization)
+end
+
