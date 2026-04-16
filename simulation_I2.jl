@@ -1,6 +1,6 @@
 """
 ATRSC Project - Warehouse optimization
-Simulation Instance 1 — FIFO Algorithm
+Simulation Instance 2 — FIFO Algorithm
 """
 
 import Pkg
@@ -45,9 +45,8 @@ mutable struct SystemState
     machine_queues::Dict{Int, Vector{Job}}
     last_job_id::Int
     worker_events::Dict{Int, Event}
-    # Full logs for post-hoc steady-state filtering
-    product_completion_log::Vector{Tuple{Float64, Int, Float64}}  # (completion_time, product_id, time_in_system)
-    worker_job_log::Vector{Tuple{Float64, Float64, Int}}           # (start_time, process_time, worker_id)
+    product_completion_log::Vector{Tuple{Float64, Int, Float64}}
+    worker_job_log::Vector{Tuple{Float64, Float64, Int}}
 end
 
 # --------------------------------------------
@@ -161,18 +160,15 @@ function save_dossier(state::SystemState, workers::Vector{Worker}, t_ss::Float64
 
     fig = Figure(size = (1200, 500))
 
-    # Avg time in system per product
     ax1 = Axis(fig[1, 1],
         title  = "Instance I$(instance_id) — Avg Time in System per Product",
         xlabel = "Product Type", ylabel = "Avg Time in System")
-    product_ids = 1:4
     avgs = [begin
         pts = filter(x -> x[2] == p, ss_jobs)
         isempty(pts) ? 0.0 : mean(x[3] for x in pts)
-    end for p in product_ids]
-    barplot!(ax1, collect(product_ids), avgs, color = :steelblue)
+    end for p in 1:4]
+    barplot!(ax1, collect(1:4), avgs, color = :steelblue)
 
-    # Worker utilization
     ax2 = Axis(fig[1, 2],
         title  = "Instance I$(instance_id) — Worker Utilization",
         xlabel = "Worker", ylabel = "Proportion of time working")
@@ -211,12 +207,12 @@ T4 = ProductType(4, 0.38,
 M1 = Machine(1, false); M2 = Machine(2, false); M3 = Machine(3, false); M4 = Machine(4, false)
 M5 = Machine(5, false); M6 = Machine(6, false); M7 = Machine(7, false); M8 = Machine(8, false)
 
-# Workers — Instance I1
+# Workers — Instance I2
 workers = [
-    Worker(1, [M1, M2]),
-    Worker(2, [M3, M4]),
-    Worker(3, [M5, M6]),
-    Worker(4, [M7, M8])
+    Worker(1, [M1, M3, M6]),
+    Worker(2, [M2, M5, M7, M8]),
+    Worker(3, [M2, M4, M5, M8]),
+    Worker(4, [M1, M3, M4, M6, M7])
 ]
 
 simulation_time = 1000.0
@@ -239,8 +235,8 @@ run(env, simulation_time)
 
 # ---- STEADY-STATE DETECTION ----
 
-log_sorted    = sort(state.product_completion_log, by = x -> x[1])
-comp_times    = [x[1] for x in log_sorted]
+log_sorted     = sort(state.product_completion_log, by = x -> x[1])
+comp_times     = [x[1] for x in log_sorted]
 comp_durations = [x[3] for x in log_sorted]
 
 t_ss_maybe = detect_steady_state(comp_times, comp_durations)
@@ -270,4 +266,4 @@ for w in sort(workers, by = w -> w.id)
     println("  Worker $(w.id): $(round(busy / measurement_period, digits=4))")
 end
 
-save_dossier(state, workers, t_ss, simulation_time, 1)
+save_dossier(state, workers, t_ss, simulation_time, 2)
