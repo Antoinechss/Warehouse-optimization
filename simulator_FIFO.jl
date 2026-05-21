@@ -180,9 +180,8 @@ end
                 machine = atelier.machines[m_id]
                 machine.occupee = true
                 emp.est_occupe = true
-                idx_doyen = index_produit_doyen(machine.file_attente)
-                p = machine.file_attente[idx_doyen]
-                deleteat!(machine.file_attente, idx_doyen)
+                p = machine.file_attente[1]
+                deleteat!(machine.file_attente, 1)
                 machine.en_service = p
                 emp.machine_assignee = nothing
                 duree = rand(Uniform(TEMPS[(p.type, m_id)]...))
@@ -330,7 +329,7 @@ function etude_performance(Q, label, mode_algo="FIFO_ATELIER", mode_choix="PLUS_
                      title = "Convergence du temps de séjour - Instance $label (Run 1)")
             vline!([duree_transient], linestyle=:dash, color=:red, label="Fin transitoire (t=$duree_transient)")
             display(p)
-            fname = "convergence_$(label).png"
+            fname = "convergence_FIFO/convergence_$(label).png"
             savefig(p, fname)
             println("Graphique de convergence sauvegardé : $fname")
         end

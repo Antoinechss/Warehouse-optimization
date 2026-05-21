@@ -355,7 +355,7 @@ function etude_performance(Q, label, mode_algo="FIFO_ATELIER", mode_choix="PLUS_
                      title = "Convergence - Instance $label - $mode_algo (Run 1)")
             vline!([duree_transient], linestyle=:dash, color=:red, label="Fin transitoire (t=$duree_transient)")
             display(p)
-            fname = "convergence_$(label)_$(mode_algo).png"
+            fname = "convergence_SPT/convergence_$(label)_$(mode_algo).png"
             savefig(p, fname)
             println("Graphique de convergence sauvegardé : $fname")
         end

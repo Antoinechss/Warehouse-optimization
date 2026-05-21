@@ -200,9 +200,8 @@ end
                 machine = atelier.machines[m_id]
                 machine.occupee = true
                 emp.est_occupe = true
-                idx = index_produit_doyen(machine.file_attente)
-                p = machine.file_attente[idx]
-                deleteat!(machine.file_attente, idx)
+                p = machine.file_attente[1]
+                deleteat!(machine.file_attente, 1)
                 machine.en_service = p
                 emp.machine_assignee = nothing
                 duree = rand(Uniform(TEMPS[(p.type, m_id)]...))
@@ -304,7 +303,7 @@ function etude_performance(Q, label, mode_algo="LB_ALGO",
                      title = "Convergence - Instance $label - $mode_algo (Run 1)")
             vline!([duree_transient], linestyle=:dash, color=:red, label="Fin transitoire (t=$duree_transient)")
             display(p)
-            fname = "convergence_$(label)_$(mode_algo).png"
+            fname = "convergence_LB_ALGO/convergence_$(label)_$(mode_algo).png"
             savefig(p, fname)
             println("Graphique sauvegardé : $fname")
         end
